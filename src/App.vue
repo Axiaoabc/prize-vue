@@ -1,6 +1,7 @@
 <script>
 import { onMounted, onUnmounted, ref, reactive, computed, toRefs } from 'vue';
 import zhCN from 'ant-design-vue/es/locale/zh_CN';
+import { message } from 'ant-design-vue';
 import { allData } from './data';
 
 export default {
@@ -15,6 +16,8 @@ export default {
       isRunning: false, // 是否正在抽奖
       baseRunAngle: 360 * 5, // 总共转动角度 至少5圈
       prizeId: 0, // 中奖id
+      editModalVisible: false, // 新增：编辑模态框可见性
+      currentEditPrize: null, // 新增：当前编辑的奖品
     })
     const prizeWrap = ref(null)
 
@@ -42,6 +45,12 @@ export default {
         key: 'img',
         scopedSlots: { customRender: 'img' }
       },
+      {
+        title: '操作',
+        dataIndex: 'action',
+        width: 80,
+        align: 'center'
+      }
     ]
 
     // 平均每个奖品角度
@@ -58,10 +67,10 @@ export default {
     // 计算绘制转盘背景
     const bgColor = computed(() => {
       const _len = state.prizeList.length
-      const colorList = ['#5352b3', '#363589']
+      const colorList = ['#5352b3', '#363589', '#363596','#6452B3']
       let colorVal = ''
       for (let i = 0; i < _len; i++) {
-        colorVal += `${colorList[i % 2]} ${rotateAngle.value * i}deg ${rotateAngle.value * (i + 1)}deg,`
+        colorVal += `${colorList[i % colorList.length]} ${rotateAngle.value * i}deg ${rotateAngle.value * (i + 1)}deg,`
       }
       return `
             background: conic-gradient(${colorVal.slice(0, -1)});
@@ -97,26 +106,55 @@ export default {
 
     // 获取随机数
     const getRandomNum = () => {
-      const num = Math.floor(Math.random() * state.prizeList.length)
-      return num
+      // 过滤出可抽奖的奖品（数量大于0且概率大于0）
+      const availablePrizes = state.prizeList.filter(prize => 
+        prize.quantity > 0 && prize.percent > 0
+      )
+
+      if (availablePrizes.length === 0) {
+        message.error('没有可抽取的奖品！')
+        return -1
+      }
+
+      // 计算总概率
+      const totalPercent = availablePrizes.reduce((sum, prize) => sum + prize.percent, 0)
+      
+      // 生成随机数 (0-100)
+      const random = Math.random() * totalPercent
+      
+      // 根据概率权重选择奖品
+      let currentSum = 0
+      for (let i = 0; i < availablePrizes.length; i++) {
+        currentSum += availablePrizes[i].percent
+        if (random <= currentSum) {
+          // 找到对应奖品在原始列表中的索引
+          const prizeIndex = state.prizeList.findIndex(item => item.key === availablePrizes[i].key)
+          return prizeIndex
+        }
+      }
+      
+      return 0 // 保底返回第一个奖品索引
     }
 
     const start = () => {
-
       if (state.prizeList.length > 0) {
         if (!state.isRunning) {
           state.isRunning = true
 
-          console.log('开始抽奖，后台请求中奖奖品')
-          // 请求返回的奖品编号 这里使用随机数
+          console.log('开始抽奖，根据概率进行抽奖')
           const prizeId = getRandomNum()
+          
+          if (prizeId === -1) {
+            state.isRunning = false
+            return
+          }
+
           state.prizeId = prizeId
           startRun()
         }
       } else {
         message.error('请添加奖品!');
       }
-
     }
 
     const handleparzeRecord = () => {
@@ -143,10 +181,22 @@ export default {
             transform: rotate(${totalRunAngle.value - state.baseRunAngle}deg);
           `
 
-      console.log('中奖ID>>>', state.prizeId, state.prizeList[state.prizeId])
-      rightHistory.value.push(state.prizeList[state.prizeId])
+      const winPrize = state.prizeList[state.prizeId]
+      console.log('中奖ID>>>', state.prizeId, winPrize)
+      
+      // 减少奖品数量
+      const prizeIndex = settingData.value.findIndex(item => item.key === winPrize.key)
+      if (prizeIndex > -1) {
+        settingData.value[prizeIndex].quantity -= 1
+        // 同步更新 prizeList 中的数量
+        state.prizeList[state.prizeId].quantity -= 1
+      }
 
+      rightHistory.value.push(winPrize)
+
+      // 保存最新数据到本地存储
       localStorage.setItem('historyData', JSON.stringify(rightHistory.value))
+      localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
     }
 
 
@@ -165,7 +215,8 @@ export default {
         let newPrizeList = [];
 
         settingState.selectedRowKeys.forEach(key => {
-          const itemToAdd = allData.find(item => item.key === key);
+          // 从 settingData 中查找数据，而不是 allData
+          const itemToAdd = settingData.value.find(item => item.key === key);
           if (itemToAdd) {
             newPrizeList.push(itemToAdd);
           }
@@ -173,13 +224,22 @@ export default {
 
         // 更新 state.prizeList 为新数组，其中仅包含 settingState.selectedRowKeys 中存在的项
         state.prizeList = newPrizeList;
+      } else {
+        // 如果没有选中项，清空奖品列表
+        state.prizeList = [];
       }
-      console.log(settingState.selectedRowKeys, 'aaa', state.prizeList);
+
+      console.log('最新数据:', settingState.selectedRowKeys, state.prizeList);
       localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
       open.value = false;
     };
 
     const settingColumns = [
+      {
+        title: '序号',
+        dataIndex: 'index',
+        customRender: ({ index }) => index + 1
+      },
       {
         title: '奖品名称',
         dataIndex: 'name',
@@ -188,8 +248,22 @@ export default {
         title: '奖品图片',
         dataIndex: 'img',
       },
+      {
+        title: '奖品数量',
+        dataIndex: 'quantity',
+      },
+      {
+        title: '奖品概率',
+        dataIndex: 'percent',
+      },
+      {
+        title: '操作',
+        dataIndex: 'action',
+        width: 100,
+      }
     ];
-    const settingData = allData;
+    // const settingData = allData;
+    const settingData = ref([...allData]);
 
     const settingState = reactive({
       selectedRowKeys: [],
@@ -209,7 +283,74 @@ export default {
       window.open(`${url}`);
     }
 
+    // 新增：编辑模态框相关方法
+    const showEditModal = (record = null) => {
+      if (record) {
+        // 编辑现有奖品
+        state.currentEditPrize = { ...record }
+      } else {
+        // 新增奖品，不设置 key
+        state.currentEditPrize = {
+          name: '',
+          pic: '',
+          quantity: 1,
+          percent: 0
+        }
+      }
+      state.editModalVisible = true
+    }
+
+    const handleEditModalOk = () => {
+      if (!state.currentEditPrize.name || !state.currentEditPrize.pic) {
+        message.error('请填写完整信息！')
+        return
+      }
+
+      if (state.currentEditPrize.key) {
+        // 编辑现有奖品
+        const index = settingData.value.findIndex(item => item.key === state.currentEditPrize.key)
+        if (index > -1) {
+          settingData.value[index] = { ...state.currentEditPrize }
+        }
+      } else {
+        // 添加新奖品，在这里生成 key
+        const newPrize = {
+          ...state.currentEditPrize,
+          key: Date.now().toString()
+        }
+        settingData.value.push(newPrize)
+        // 自动选中新增的奖品
+        settingState.selectedRowKeys.push(newPrize.key)
+      }
+
+      // 更新 prizeList
+      const newPrizeList = settingData.value.filter(item =>
+        settingState.selectedRowKeys.includes(item.key)
+      )
+      state.prizeList = newPrizeList
+
+      // 保存到本地存储
+      localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
+
+      state.editModalVisible = false
+      message.success('保存成功！')
+    }
+
     const locale = zhCN
+
+    // 在 setup 函数中添加清空和删除历史记录的方法
+    const clearHistory = () => {
+      rightHistory.value = []
+      localStorage.setItem('historyData', JSON.stringify([]))
+      message.success('清空成功')
+    }
+
+    const deleteHistoryItem = (record, index) => {
+      rightHistory.value.splice(index, 1)
+      localStorage.setItem('historyData', JSON.stringify(rightHistory.value))
+      message.success('删除成功')
+    }
+
     return {
       ...toRefs(state),
       bgColor,
@@ -231,7 +372,11 @@ export default {
       settingState,
       shareToCSDN,
       locale,
-      particlesLoaded
+      particlesLoaded,
+      showEditModal,
+      handleEditModalOk,
+      clearHistory,
+      deleteHistoryItem,
     }
   }
 }
@@ -261,26 +406,34 @@ export default {
           <a-button type="primary" @click="handleSettingModal">设置奖品</a-button>
         </div>
 
-        <div class="shareBtn">
+        <!-- <div class="shareBtn">
           <a-button type="primary" @click="shareToCSDN">分享</a-button>
-        </div>
+        </div> -->
 
         <!-- 中奖记录 -->
         <div class="histroy-list">
+          <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0;">中奖记录</h3>
+            <a-button type="primary" danger @click="clearHistory">
+              清空记录
+            </a-button>
+          </div>
           <a-table :dataSource="rightHistory" :columns="columns" style="height: 500px;" size="small"
             :scroll="{ y: 400 }">
-
             <template #bodyCell="{ column, record, index }">
-
-
               <template v-if="column.dataIndex === 'index'">
                 {{ index + 1 }}
               </template>
 
-
-              <div v-if="column.dataIndex === 'img'">
+              <template v-if="column.dataIndex === 'img'">
                 <img style="width: 50px; height: 50px;" :src="record.pic" alt="">
-              </div>
+              </template>
+
+              <template v-if="column.dataIndex === 'action'">
+                <a-button type="link" danger @click="deleteHistoryItem(record, index)">
+                  删除
+                </a-button>
+              </template>
             </template>
           </a-table>
         </div>
@@ -290,15 +443,40 @@ export default {
 
 
     <a-modal v-model:open="open" title="设置奖品" @ok="handleOk" width="1100px" cancelText="取消" okText="确定">
+      <div style="margin-bottom: 16px">
+        <a-button type="primary" @click="showEditModal()">新增奖品</a-button>
+      </div>
       <a-table :row-selection="{ selectedRowKeys: settingState.selectedRowKeys, onChange: onSelectChange }"
         :scroll="{ y: 400 }" :columns="settingColumns" :data-source="settingData" style="width: 1050px !important;">
         <template #bodyCell="{ column, record, index }">
-
-          <div v-if="column.dataIndex === 'img'">
+          <template v-if="column.dataIndex === 'img'">
             <img style="width: 50px; height: 50px;" :src="record.pic" alt="">
-          </div>
+          </template>
+          <template v-if="column.dataIndex === 'action'">
+            <a @click="showEditModal(record)">编辑</a>
+          </template>
         </template>
       </a-table>
+    </a-modal>
+
+    <!-- 新增：编辑奖品的模态框 -->
+    <a-modal v-model:open="editModalVisible" :title="currentEditPrize?.key ? '编辑奖品' : '新增奖品'" @ok="handleEditModalOk"
+      cancelText="取消" okText="确定">
+      <a-form :model="currentEditPrize" layout="vertical">
+        <a-form-item label="奖品名称" required>
+          <a-input v-model:value="currentEditPrize.name" placeholder="请输入奖品名称" />
+        </a-form-item>
+        <a-form-item label="奖品图片" required>
+          <a-input v-model:value="currentEditPrize.pic" placeholder="请输入图片URL" />
+        </a-form-item>
+        <a-form-item label="奖品数量">
+          <a-input-number v-model:value="currentEditPrize.quantity" :min="1" />
+        </a-form-item>
+        <a-form-item label="中奖概率">
+          <a-input-number v-model:value="currentEditPrize.percent" :min="0" :max="100" :formatter="value => `${value}%`"
+            :parser="value => value.replace('%', '')" />
+        </a-form-item>
+      </a-form>
     </a-modal>
 
     <vue-particles id="tsparticles" @particles-loaded="particlesLoaded" url="http://foo.bar/particles.json" />
