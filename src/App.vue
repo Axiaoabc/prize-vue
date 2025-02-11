@@ -18,6 +18,7 @@ export default {
       prizeId: 0, // 中奖id
       editModalVisible: false, // 新增：编辑模态框可见性
       currentEditPrize: null, // 新增：当前编辑的奖品
+      historyModalVisible: false, // 新增：中奖记录模态框可见性
     })
     const prizeWrap = ref(null)
 
@@ -67,7 +68,7 @@ export default {
     // 计算绘制转盘背景
     const bgColor = computed(() => {
       const _len = state.prizeList.length
-      const colorList = ['#5352b3', '#363589', '#363596','#6452B3']
+      const colorList = ['#FCF2D7', '#F8E2AF', '#E6C98F', '#F5E8C6']
       let colorVal = ''
       for (let i = 0; i < _len; i++) {
         colorVal += `${colorList[i % colorList.length]} ${rotateAngle.value * i}deg ${rotateAngle.value * (i + 1)}deg,`
@@ -87,17 +88,25 @@ export default {
               transform-origin: 50% 100%;
             `
       }
+
     })
+
 
     onMounted(() => {
       prizeWrap.value.style = `${bgColor.value} transform: rotate(-${rotateAngle.value / 2}deg)`
 
+      // 加载保存的数据
       if (JSON.parse(localStorage.getItem('prizeList'))) {
         const prizeList = JSON.parse(localStorage.getItem('prizeList'))
         const keys = prizeList.map(item => item.key)
         settingState.selectedRowKeys = keys
-      }
 
+        // 如果本地存储中有 settingData，使用它更新 settingData
+        const savedSettingData = localStorage.getItem('settingData')
+        if (savedSettingData) {
+          settingData.value = JSON.parse(savedSettingData)
+        }
+      }
     })
 
     onUnmounted(() => {
@@ -107,7 +116,7 @@ export default {
     // 获取随机数
     const getRandomNum = () => {
       // 过滤出可抽奖的奖品（数量大于0且概率大于0）
-      const availablePrizes = state.prizeList.filter(prize => 
+      const availablePrizes = state.prizeList.filter(prize =>
         prize.quantity > 0 && prize.percent > 0
       )
 
@@ -118,10 +127,10 @@ export default {
 
       // 计算总概率
       const totalPercent = availablePrizes.reduce((sum, prize) => sum + prize.percent, 0)
-      
-      // 生成随机数 (0-100)
+
+      // 生成随机数 (0-总概率)
       const random = Math.random() * totalPercent
-      
+
       // 根据概率权重选择奖品
       let currentSum = 0
       for (let i = 0; i < availablePrizes.length; i++) {
@@ -132,18 +141,24 @@ export default {
           return prizeIndex
         }
       }
-      
-      return 0 // 保底返回第一个奖品索引
+
+      return -1
     }
 
     const start = () => {
       if (state.prizeList.length > 0) {
         if (!state.isRunning) {
-          state.isRunning = true
+          // 检查是否还有可抽奖品
+          const availablePrizes = state.prizeList.filter(prize => prize.quantity > 0)
+          if (availablePrizes.length === 0) {
+            message.error('所有奖品已抽完！')
+            return
+          }
 
+          state.isRunning = true
           console.log('开始抽奖，根据概率进行抽奖')
           const prizeId = getRandomNum()
-          
+
           if (prizeId === -1) {
             state.isRunning = false
             return
@@ -153,7 +168,7 @@ export default {
           startRun()
         }
       } else {
-        message.error('请添加奖品!');
+        message.error('请添加奖品!')
       }
     }
 
@@ -183,20 +198,36 @@ export default {
 
       const winPrize = state.prizeList[state.prizeId]
       console.log('中奖ID>>>', state.prizeId, winPrize)
-      
+
+      // 检查奖品是否还有库存
+      if (winPrize.quantity <= 0) {
+        message.error('该奖品已无库存！')
+        return
+      }
+
       // 减少奖品数量
       const prizeIndex = settingData.value.findIndex(item => item.key === winPrize.key)
       if (prizeIndex > -1) {
+        // 更新 settingData 中的数量
         settingData.value[prizeIndex].quantity -= 1
-        // 同步更新 prizeList 中的数量
-        state.prizeList[state.prizeId].quantity -= 1
+
+        // 更新 prizeList 中的数量
+        const prizeListIndex = state.prizeList.findIndex(item => item.key === winPrize.key)
+        if (prizeListIndex > -1) {
+          state.prizeList[prizeListIndex].quantity -= 1
+        }
+
+        // 添加到中奖记录
+        rightHistory.value.push({
+          ...winPrize,
+          quantity: state.prizeList[prizeListIndex].quantity // 记录剩余数量
+        })
+
+        // 保存所有更新
+        saveSettingData()
+        localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
+        localStorage.setItem('historyData', JSON.stringify(rightHistory.value))
       }
-
-      rightHistory.value.push(winPrize)
-
-      // 保存最新数据到本地存储
-      localStorage.setItem('historyData', JSON.stringify(rightHistory.value))
-      localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
     }
 
 
@@ -230,7 +261,9 @@ export default {
       }
 
       console.log('最新数据:', settingState.selectedRowKeys, state.prizeList);
+      console.log('最新数据settingData', settingData.value);
       localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
+      localStorage.setItem('initialSettingData', JSON.stringify(settingData.value))
       open.value = false;
     };
 
@@ -259,11 +292,12 @@ export default {
       {
         title: '操作',
         dataIndex: 'action',
-        width: 100,
+        width: 160,
+        align: 'center'
       }
     ];
     // const settingData = allData;
-    const settingData = ref([...allData]);
+    const settingData = ref(JSON.parse(localStorage.getItem('settingData')) || [...allData]);
 
     const settingState = reactive({
       selectedRowKeys: [],
@@ -331,6 +365,7 @@ export default {
 
       // 保存到本地存储
       localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
+      saveSettingData() // 保存 settingData
 
       state.editModalVisible = false
       message.success('保存成功！')
@@ -338,10 +373,37 @@ export default {
 
     const locale = zhCN
 
-    // 在 setup 函数中添加清空和删除历史记录的方法
+    // 修改清空历史记录的方法
     const clearHistory = () => {
+      // 清空历史记录
       rightHistory.value = []
       localStorage.setItem('historyData', JSON.stringify([]))
+
+      // 重置所有奖品的数量为初始值
+      const savedSettingData = localStorage.getItem('settingData')
+      const initialSettingData = JSON.parse(localStorage.getItem('initialSettingData')) || [...allData]
+
+      settingData.value.forEach((item, index) => {
+        // 找到对应的初始数据
+        const initialItem = initialSettingData.find(initial => initial.key === item.key)
+        if (initialItem) {
+          item.quantity = initialItem.quantity
+        }
+      })
+      console.log('clearHistory', settingData.value)
+
+      // 同步更新 prizeList 中的数量
+      state.prizeList.forEach(prize => {
+        const settingItem = settingData.value.find(item => item.key === prize.key)
+        if (settingItem) {
+          prize.quantity = settingItem.quantity
+        }
+      })
+
+      // 保存更新后的数据
+      saveSettingData()
+      localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
+
       message.success('清空成功')
     }
 
@@ -349,6 +411,39 @@ export default {
       rightHistory.value.splice(index, 1)
       localStorage.setItem('historyData', JSON.stringify(rightHistory.value))
       message.success('删除成功')
+    }
+
+    // 添加保存 settingData 的方法
+    const saveSettingData = () => {
+      localStorage.setItem('settingData', JSON.stringify(settingData.value))
+    }
+
+    // 添加删除奖品的方法
+    const deletePrize = (record) => {
+      // 从 settingData 中删除
+      const index = settingData.value.findIndex(item => item.key === record.key)
+      if (index > -1) {
+        settingData.value.splice(index, 1)
+      }
+
+      // 从选中项中移除
+      const selectedIndex = settingState.selectedRowKeys.indexOf(record.key)
+      if (selectedIndex > -1) {
+        settingState.selectedRowKeys.splice(selectedIndex, 1)
+      }
+
+      // 从 prizeList 中移除
+      state.prizeList = state.prizeList.filter(item => item.key !== record.key)
+
+      // 保存更新
+      saveSettingData()
+      localStorage.setItem('prizeList', JSON.stringify(state.prizeList))
+      message.success('删除成功')
+    }
+
+    // 添加打开中奖记录的方法
+    const showHistoryModal = () => {
+      state.historyModalVisible = true
     }
 
     return {
@@ -377,6 +472,9 @@ export default {
       handleEditModalOk,
       clearHistory,
       deleteHistoryItem,
+      saveSettingData,
+      deletePrize,
+      showHistoryModal,
     }
   }
 }
@@ -385,7 +483,7 @@ export default {
 <template>
   <a-config-provider :locale="locale">
 
-    <div id="app" v-cloak>
+    <div id="wrapper" v-cloak >
 
       <div class="box">
         <!-- 转盘 -->
@@ -403,7 +501,10 @@ export default {
 
         <!-- 设置奖品 -->
         <div class="settingPrizeBtn">
-          <a-button type="primary" @click="handleSettingModal">设置奖品</a-button>
+          <a-space>
+            <a-button type="primary" @click="handleSettingModal">设置奖品</a-button>
+            <a-button type="primary" @click="showHistoryModal">中奖记录</a-button>
+          </a-space>
         </div>
 
         <!-- <div class="shareBtn">
@@ -411,15 +512,26 @@ export default {
         </div> -->
 
         <!-- 中奖记录 -->
-        <div class="histroy-list">
-          <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin: 0;">中奖记录</h3>
-            <a-button type="primary" danger @click="clearHistory">
+        <a-modal
+          v-model:open="historyModalVisible"
+          title="中奖记录"
+          width="800px"
+          :footer="null"
+          :style="{ top: '10%' }"
+          wrapClassName="history-modal"
+        >
+          <div style="margin-bottom: 16px; display: flex; justify-content: flex-end;">
+            <a-button type="primary" danger @click="clearHistory" :disabled="!rightHistory.length">
               清空记录
             </a-button>
           </div>
-          <a-table :dataSource="rightHistory" :columns="columns" style="height: 500px;" size="small"
-            :scroll="{ y: 400 }">
+          <a-table 
+            :dataSource="rightHistory" 
+            :columns="columns" 
+            size="small"
+            :scroll="{ y: 400 }"
+            style="width: 100% !important;"
+          >
             <template #bodyCell="{ column, record, index }">
               <template v-if="column.dataIndex === 'index'">
                 {{ index + 1 }}
@@ -428,32 +540,41 @@ export default {
               <template v-if="column.dataIndex === 'img'">
                 <img style="width: 50px; height: 50px;" :src="record.pic" alt="">
               </template>
-
-              <template v-if="column.dataIndex === 'action'">
-                <a-button type="link" danger @click="deleteHistoryItem(record, index)">
-                  删除
-                </a-button>
-              </template>
             </template>
           </a-table>
-        </div>
+        </a-modal>
       </div>
 
     </div>
 
 
-    <a-modal v-model:open="open" title="设置奖品" @ok="handleOk" width="1100px" cancelText="取消" okText="确定">
+    <a-modal 
+      v-model:open="open" 
+      title="设置奖品" 
+      @ok="handleOk" 
+      width="900px" 
+      cancelText="取消" 
+      okText="确定"
+      :style="{ top: '10%' }"
+      wrapClassName="setting-modal"
+    >
       <div style="margin-bottom: 16px">
         <a-button type="primary" @click="showEditModal()">新增奖品</a-button>
       </div>
       <a-table :row-selection="{ selectedRowKeys: settingState.selectedRowKeys, onChange: onSelectChange }"
-        :scroll="{ y: 400 }" :columns="settingColumns" :data-source="settingData" style="width: 1050px !important;">
+        :scroll="{ y: 400 }" :columns="settingColumns" :data-source="settingData" style="width: 100% !important;">
         <template #bodyCell="{ column, record, index }">
           <template v-if="column.dataIndex === 'img'">
             <img style="width: 50px; height: 50px;" :src="record.pic" alt="">
           </template>
           <template v-if="column.dataIndex === 'action'">
-            <a @click="showEditModal(record)">编辑</a>
+            <a-space>
+              <a @click="showEditModal(record)">编辑</a>
+              <a-divider type="vertical" />
+              <a-popconfirm title="确定要删除这个奖品吗？" @confirm="deletePrize(record)" ok-text="确定" cancel-text="取消">
+                <a style="color: #ff4d4f">删除</a>
+              </a-popconfirm>
+            </a-space>
           </template>
         </template>
       </a-table>
@@ -479,13 +600,14 @@ export default {
       </a-form>
     </a-modal>
 
-    <vue-particles id="tsparticles" @particles-loaded="particlesLoaded" url="http://foo.bar/particles.json" />
+    <!-- <vue-particles id="tsparticles" @particles-loaded="particlesLoaded" url="http://foo.bar/particles.json" /> -->
 
-    <vue-particles id="tsparticles" @particles-loaded="particlesLoaded" :options="{
+    <!-- <vue-particles id="tsparticles" @particles-loaded="particlesLoaded" :options="{
       background: {
         color: {
-          value: '#000'
-        }
+          value: ''
+        },
+        image:'/bg_prizes.jpg'
       },
       fpsLimit: 120,
       interactivity: {
@@ -551,15 +673,24 @@ export default {
         }
       },
       detectRetina: true
-    }" />
+    }" /> -->
   </a-config-provider>
 </template>
 
 <style scoped lang="scss">
+// body {
+//   background-image: url(/bg_prizes.jpg);
+// }
+
 .settingPrizeBtn {
-  position: relative;
-  top: -330px;
-  right: 730px;
+  position: absolute;
+  bottom: 5%;
+  right: 4%;
+  
+  // 确保按钮之间有间距
+  :deep(.ant-space) {
+    gap: 8px !important;
+  }
 }
 
 .shareBtn {
@@ -570,22 +701,25 @@ export default {
 
 .box {
   position: relative;
-  top: 100px;
   z-index: 2;
-  margin-top: 100px;
+  // margin-top: 100px;
   display: flex;
   align-items: center;
-
-  .histroy-list {
-    position: relative;
-    left: -400px;
-  }
+  width: 100%;
+  height: 100%;
 }
 
 [v-cloak] {
   display: none;
 }
-
+#wrapper{
+  width: 100vw;
+  height: 100vh;
+  background-image: url(/bg_prizes.jpg);
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: top center;
+}
 .container {
   left: -10px;
   width: 540px;
@@ -594,7 +728,7 @@ export default {
   /*background: conic-gradient( 
        red 6deg, orange 6deg 18deg, yellow 18deg 45deg, 
        green 45deg 110deg, blue 110deg 200deg, purple 200deg);*/
-  margin: 100px auto;
+  margin: 16% auto 0;
   position: relative;
 }
 
@@ -602,8 +736,10 @@ export default {
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  border: 10px solid #98d3fc;
+  border: 10px solid #fff;
+  outline: 1px solid #000;
   overflow: hidden;
+  position: relative;
 }
 
 .prize-item {
@@ -616,14 +752,14 @@ export default {
 }
 
 .prize-item img {
-  width: 30%;
+  width: 20%;
   height: 20%;
   margin: 40px auto 10px;
   display: block;
 }
 
 .prize-item p {
-  color: #fff;
+  color: #900C16;
   font-size: 12px;
   text-align: center;
   line-height: 20px;
@@ -657,4 +793,23 @@ export default {
 :deep(.ant-table) {
   width: 400px;
 }
+
+:deep(.history-modal),
+:deep(.setting-modal) {
+  .ant-modal {
+    max-height: 70vh;
+    
+    .ant-modal-content {
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+      
+      .ant-modal-body {
+        flex: 1;
+        overflow: auto;
+      }
+    }
+  }
+}
+
 </style>
